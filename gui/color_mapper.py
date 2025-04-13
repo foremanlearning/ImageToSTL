@@ -128,7 +128,7 @@ class ColorMappingWidget(QGroupBox):
         color_name = selected_item.data(Qt.UserRole)
         
         # Remove from mappings
-        if color_name in self.mappings:
+        if (color_name in self.mappings):
             del self.mappings[color_name]
             
             # Update the list
@@ -167,9 +167,28 @@ class ColorMappingWidget(QGroupBox):
         if not self.image_processor.image:
             QMessageBox.information(self, "No Image", "Please load an image first")
             return
+        
+        # Ask user for height range
+        min_height, ok1 = QInputDialog.getDouble(
+            self, "Minimum Height", 
+            "Enter the minimum height value:",
+            value=0.0, min=0.0, max=100.0, decimals=1
+        )
+        
+        if not ok1:
+            return
             
-        # Call the image processor's auto-assign method
-        self.image_processor.auto_assign_heights_by_brightness()
+        max_height, ok2 = QInputDialog.getDouble(
+            self, "Maximum Height", 
+            "Enter the maximum height value:",
+            value=5.0, min=min_height + 0.1, max=100.0, decimals=1
+        )
+        
+        if not ok2:
+            return
+        
+        # Call the image processor's auto-assign method with height range
+        self.image_processor.auto_assign_heights_by_brightness(min_height, max_height)
         
         # Clear existing mappings since we're using auto brightness
         self.mappings = {}
@@ -177,7 +196,8 @@ class ColorMappingWidget(QGroupBox):
         
         # Let the main window know we're using auto assignment
         QMessageBox.information(self, "Auto-Assign", 
-                               "Heights automatically assigned based on brightness.\n"
+                               f"Heights automatically assigned based on brightness.\n"
+                               f"Height range: {min_height:.1f} to {max_height:.1f}\n"
                                "Click 'Generate STL' to create the model.")
         self.colorMappingChanged.emit()
     
@@ -196,6 +216,25 @@ class ColorMappingWidget(QGroupBox):
         
         if not ok:
             return
+        
+        # Ask user for height range
+        min_height, ok1 = QInputDialog.getDouble(
+            self, "Minimum Height", 
+            "Enter the minimum height value:",
+            value=0.0, min=0.0, max=100.0, decimals=1
+        )
+        
+        if not ok1:
+            return
+            
+        max_height, ok2 = QInputDialog.getDouble(
+            self, "Maximum Height", 
+            "Enter the maximum height value:",
+            value=5.0, min=min_height + 0.1, max=100.0, decimals=1
+        )
+        
+        if not ok2:
+            return
             
         # Extract dominant colors from image
         colors = self.image_processor.extract_dominant_colors(num_colors)
@@ -209,13 +248,15 @@ class ColorMappingWidget(QGroupBox):
         
         # Add each color with a height based on its brightness
         # Brighter colors will be higher
+        height_range = max_height - min_height
+        
         for i, color in enumerate(colors):
             # Convert RGB to hex
             hex_color = '#{:02x}{:02x}{:02x}'.format(int(color[0]), int(color[1]), int(color[2]))
             
-            # Calculate height based on brightness (0.0-1.0)
+            # Calculate height based on brightness (0.0-1.0) and map to requested range
             brightness = (color[0] + color[1] + color[2]) / (3 * 255)
-            height = brightness * 5.0  # Scale to 0-5 range
+            height = min_height + (brightness * height_range)
             
             # Add mapping
             self.mappings[hex_color] = height
@@ -226,6 +267,7 @@ class ColorMappingWidget(QGroupBox):
         
         QMessageBox.information(self, "Auto Add Colors", 
                                f"{len(colors)} color ranges identified and added.\n"
+                               f"Height range: {min_height:.1f} to {max_height:.1f}\n"
                                "You can adjust heights manually if needed.")
         
         self.colorMappingChanged.emit()

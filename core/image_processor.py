@@ -62,10 +62,14 @@ class ImageProcessor:
         """Update the mapping of color to height."""
         self.color_height_mapping[color] = height_value
         
-    def auto_assign_heights_by_brightness(self):
+    def auto_assign_heights_by_brightness(self, min_height=0.0, max_height=1.0):
         """
         Automatically assign heights based on image brightness.
         Brighter pixels will be higher.
+        
+        Args:
+            min_height: Minimum height value to assign (default: 0.0)
+            max_height: Maximum height value to assign (default: 1.0)
         """
         if self.image_array is None:
             return
@@ -76,10 +80,17 @@ class ImageProcessor:
         # Normalize to 0-1 range
         min_val = np.min(brightness)
         max_val = np.max(brightness)
+        
         if max_val > min_val:
-            self.height_map = (brightness - min_val) / (max_val - min_val)
+            # Normalize brightness to 0-1 range
+            normalized = (brightness - min_val) / (max_val - min_val)
+            
+            # Scale to requested height range
+            height_range = max_height - min_height
+            self.height_map = min_height + (normalized * height_range)
         else:
-            self.height_map = np.zeros_like(brightness)
+            # If all pixels have the same brightness, use the min height
+            self.height_map = np.full_like(brightness, min_height, dtype=float)
     
     def generate_height_map_from_colors(self, transparency_threshold=128):
         """
