@@ -151,11 +151,30 @@ class STLGenerator:
             
         faces = np.array(faces)
         
-        # Store the triangle count
-        self.triangle_count = len(faces)
-        
         # Create trimesh object
         self.mesh = trimesh.Trimesh(vertices=vertices, faces=faces)
+        
+        # Attempt to repair mesh issues immediately after creation
+        if not self.mesh.is_watertight:
+            # Merge vertices that are very close to each other
+            # This helps eliminate non-manifold edges caused by duplicate vertices
+            self.mesh.merge_vertices(merge_tolerance=1e-5)
+            
+            # Fix face normals to be consistent
+            self.mesh.fix_normals()
+            
+            # Remove any faces with zero area (degenerate faces)
+            areas = self.mesh.area_faces
+            valid_faces = areas > 1e-8
+            if not np.all(valid_faces):
+                self.mesh.update_faces(valid_faces)
+                print(f"Removed {np.sum(~valid_faces)} degenerate faces")
+            
+            # Apply additional fixes for non-manifold edges
+            self.mesh = self.enforce_edge_consistency(self.mesh)
+        
+        # Update triangle count after repairs
+        self.triangle_count = len(self.mesh.faces)
         
         return self.mesh
     
@@ -171,7 +190,46 @@ class STLGenerator:
             return False
             
         try:
+            # Fix non-manifold edges before exporting
+            if not self.mesh.is_watertight:
+                print("Mesh is not watertight, attempting to fix...")
+                # First, merge duplicate vertices that might be causing issues
+                self.mesh.merge_vertices(merge_tolerance=1e-5)
+                
+                # Fix normals to ensure consistent orientation
+                self.mesh.fix_normals()
+                
+                # Fill holes if any exist
+                if hasattr(self.mesh, 'holes') and callable(getattr(self.mesh, 'holes')):
+                    holes = self.mesh.holes()
+                    if len(holes) > 0:
+                        print(f"Fixing {len(holes)} holes in the mesh")
+                        self.mesh.fill_holes()
+                
+                # Remove duplicate or degenerate faces
+                if len(self.mesh.faces) > 0:
+                    unique_faces = np.unique(np.sort(self.mesh.faces, axis=1), axis=0)
+                    if len(unique_faces) < len(self.mesh.faces):
+                        print(f"Removed {len(self.mesh.faces) - len(unique_faces)} duplicate faces")
+                        self.mesh.faces = unique_faces
+                
+                # Apply advanced repair using the edge consistency method
+                self.mesh = self.enforce_edge_consistency(self.mesh)
+                
+                # Final validation
+                if not self.mesh.is_watertight:
+                    print("Warning: Mesh may still have non-manifold edges after repair")
+                else:
+                    print("Mesh successfully repaired to be watertight")
+            
+            # Export the mesh (repaired if needed)
             self.mesh.export(file_path)
+            
+            # Report triangle count in exported file
+            print(f"Exported STL with {len(self.mesh.faces)} triangles")
+            # Update the triangle count
+            self.triangle_count = len(self.mesh.faces)
+            
             return True
         except Exception as e:
             print(f"Error saving STL: {e}")
@@ -180,3 +238,74 @@ class STLGenerator:
     def get_mesh(self):
         """Return the current mesh object."""
         return self.mesh
+
+    def enforce_edge_consistency(self, mesh):
+        """
+        Ensure edge consistency across the mesh to eliminate non-manifold edges.
+        This function attempts to fix edges shared by more than two faces.
+        
+        Parameters:
+        - mesh: A trimesh object to check and fix
+        
+        Returns:
+        - Fixed trimesh object
+        """
+        # First check if there are any non-manifold edges
+        if mesh.is_watertight:
+            return mesh  # Already good
+        
+        # Get edges that appear more than twice (non-manifold)
+        edge_faces = mesh.edges_face
+        edge_counts = np.bincount(mesh.edges.flatten())
+        problem_vertex_indices = np.where(edge_counts > 2)[0]
+        
+        if len(problem_vertex_indices) == 0:
+            # No problematic vertices found
+            return mesh
+            
+        print(f"Found {len(problem_vertex_indices)} vertices involved in non-manifold edges")
+        
+        # Create a small offset for problematic vertices
+        # This effectively duplicates vertices that are causing non-manifold edges
+        vertices = mesh.vertices.copy()
+        offset_factor = 1e-5  # Small enough not to be visible but enough to separate vertices
+        
+        # Create new faces list to build the mesh with fixed topology
+        new_faces = []
+        vertex_map = {}  # Map to keep track of duplicated vertices
+        next_vertex_id = len(vertices)
+        
+        # Process each face
+        for face in mesh.faces:
+            new_face = face.copy()
+            
+            # Check if any vertex in this face is problematic
+            for i, vertex_id in enumerate(face):
+                if vertex_id in problem_vertex_indices:
+                    # Create a key based on the face and vertex position
+                    face_key = tuple(sorted(face))
+                    vertex_key = (face_key, vertex_id)
+                    
+                    if vertex_key not in vertex_map:
+                        # Create a slightly offset duplicate vertex
+                        vertex_pos = vertices[vertex_id]
+                        new_vertex = vertex_pos + np.random.uniform(-offset_factor, offset_factor, 3)
+                        vertices = np.vstack([vertices, new_vertex])
+                        vertex_map[vertex_key] = next_vertex_id
+                        next_vertex_id += 1
+                    
+                    # Use the duplicated vertex instead
+                    new_face[i] = vertex_map[vertex_key]
+                    
+            new_faces.append(new_face)
+        
+        # Create new mesh with fixed vertices
+        fixed_mesh = trimesh.Trimesh(vertices=vertices, faces=new_faces)
+        
+        # Ensure normals are consistent
+        fixed_mesh.fix_normals()
+        
+        # Final cleanup - merge vertices that ended up too close
+        fixed_mesh.merge_vertices(merge_tolerance=1e-6)
+        
+        return fixed_mesh
