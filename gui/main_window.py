@@ -69,21 +69,33 @@ class STLWorker(QThread):
             self.progressUpdated.emit(50, f"Applying smoothing (factor: {smoothing_factor:.1f})...")
             self.image_processor.apply_smoothing(smoothing_factor)
         
-        self.progressUpdated.emit(60, "Creating 3D mesh...")
+        # Get triangle limit (if any)
+        max_triangles = params.get('max_triangles', None)
+        if max_triangles == 0:  # 0 means no limit in the UI
+            max_triangles = None
+            
+        # Adjust status message based on whether we're limiting triangles
+        if max_triangles:
+            self.progressUpdated.emit(60, f"Creating 3D mesh (limit: {max_triangles:,} triangles)...")
+        else:
+            self.progressUpdated.emit(60, "Creating 3D mesh...")
         
-        # Create mesh
+        # Create mesh with triangle limit
         mesh = self.stl_generator.create_mesh_from_height_map(
             self.image_processor.height_map,
             base_thickness=params.get('base_thickness', 1.0),
-            scale_factor=params.get('scale_factor', 1.0)
+            scale_factor=params.get('scale_factor', 1.0),
+            max_triangles=max_triangles
         )
         
-        self.progressUpdated.emit(90, "Finalizing 3D model...")
+        # Report triangle count
+        triangle_count = self.stl_generator.get_triangle_count()
+        self.progressUpdated.emit(90, f"Finalizing 3D model ({triangle_count:,} triangles)...")
         
         # Emit the result
         self.resultReady.emit(mesh)
         
-        self.progressUpdated.emit(100, "STL generation complete")
+        self.progressUpdated.emit(100, f"STL generation complete ({triangle_count:,} triangles)")
 
 class MainWindow(QMainWindow):
     """Main window of the Image to STL Converter application."""
@@ -210,6 +222,22 @@ class MainWindow(QMainWindow):
         transparency_layout.addWidget(self.transparency_value)
         self.transparency_slider.valueChanged.connect(lambda v: self.transparency_value.setText(str(v)))
         stl_params_layout.addLayout(transparency_layout)
+        
+        # Triangle limit control
+        triangle_limit_layout = QHBoxLayout()
+        triangle_limit_layout.addWidget(QLabel("Triangle Limit:"))
+        self.triangle_limit_spin = QSpinBox()
+        self.triangle_limit_spin.setRange(0, 1000000)  # 0 means no limit
+        self.triangle_limit_spin.setSingleStep(1000)
+        self.triangle_limit_spin.setValue(50000)       # Default 50k triangles
+        self.triangle_limit_spin.setSuffix(" triangles")
+        self.triangle_limit_spin.setSpecialValueText("No limit")
+        triangle_limit_layout.addWidget(self.triangle_limit_spin)
+        stl_params_layout.addLayout(triangle_limit_layout)
+        
+        # Triangle count display
+        self.triangle_count_label = QLabel("Triangles: 0")
+        stl_params_layout.addWidget(self.triangle_count_label)
         
         # Generate and export buttons
         button_layout = QHBoxLayout()
@@ -361,6 +389,10 @@ class MainWindow(QMainWindow):
             self.stl_preview.display_mesh(mesh)
             self.export_btn.setEnabled(True)
             self.actionSave.setEnabled(True)
+            
+            # Update the triangle count label
+            triangle_count = self.stl_generator.get_triangle_count()
+            self.triangle_count_label.setText(f"Triangles: {triangle_count:,}")
         
         # Hide progress bar after a delay
         QTimer.singleShot(2000, lambda: self.progress_bar.setVisible(False))
@@ -387,7 +419,8 @@ class MainWindow(QMainWindow):
             'resolution_factor': self.resolution_slider.value() / 100.0,
             'smoothing_factor': self.smooth_slider.value() / 10.0,
             'base_thickness': self.base_thickness_spin.value(),
-            'scale_factor': self.scale_spin.value()
+            'scale_factor': self.scale_spin.value(),
+            'max_triangles': self.triangle_limit_spin.value()
         }
         
         # Configure and start the worker thread
@@ -440,3 +473,4 @@ class MainWindow(QMainWindow):
                 self.status_label.setText(f"Loaded preset: {os.path.basename(file_path)}")
             else:
                 QMessageBox.critical(self, "Error", "Failed to load the preset file.")
+```

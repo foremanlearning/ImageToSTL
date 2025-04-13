@@ -9,8 +9,9 @@ class STLGenerator:
     
     def __init__(self):
         self.mesh = None
+        self.triangle_count = 0
         
-    def create_mesh_from_height_map(self, height_map, base_thickness=1.0, scale_factor=1.0):
+    def create_mesh_from_height_map(self, height_map, base_thickness=1.0, scale_factor=1.0, max_triangles=None):
         """
         Convert a height map to a 3D mesh.
         
@@ -18,6 +19,7 @@ class STLGenerator:
         - height_map: 2D numpy array representing heights
         - base_thickness: Thickness of the base in units
         - scale_factor: Scale factor to apply to the final mesh
+        - max_triangles: Maximum number of triangles to generate (None for no limit)
         
         Returns:
         - A trimesh object representing the 3D model
@@ -27,6 +29,33 @@ class STLGenerator:
             
         # Get dimensions
         height, width = height_map.shape
+        
+        # Calculate target downsample factor if max_triangles is specified
+        # The approximate number of triangles for a height map is 2 * (w-1) * (h-1) * 3 (top, bottom, sides)
+        downsample_factor = 1
+        estimated_triangles = 2 * (width-1) * (height-1) * 3
+        
+        if max_triangles is not None and max_triangles > 0 and estimated_triangles > max_triangles:
+            # Calculate the factor needed to get below max_triangles
+            target_factor = np.sqrt(max_triangles / estimated_triangles) * 0.9  # 10% safety margin
+            
+            # Find the nearest integer downsample factor (must be at least 1)
+            downsample_factor = max(1, int(1 / target_factor))
+            
+            # Downsample the height map
+            if downsample_factor > 1:
+                from PIL import Image
+                height_map_img = Image.fromarray(height_map)
+                new_width = width // downsample_factor
+                new_height = height // downsample_factor
+                
+                # Ensure minimum dimensions
+                new_width = max(2, new_width)
+                new_height = max(2, new_height)
+                
+                downsampled = height_map_img.resize((new_width, new_height), Image.BICUBIC)
+                height_map = np.array(downsampled)
+                height, width = height_map.shape
         
         # Create vertex array from height map
         vertices = []
@@ -110,9 +139,19 @@ class STLGenerator:
             
         faces = np.array(faces)
         
+        # Store the triangle count
+        self.triangle_count = len(faces)
+        
         # Create trimesh object
         self.mesh = trimesh.Trimesh(vertices=vertices, faces=faces)
+        
         return self.mesh
+    
+    def get_triangle_count(self):
+        """Get the number of triangles in the current mesh."""
+        if self.mesh is None:
+            return 0
+        return self.triangle_count
     
     def save_stl(self, file_path):
         """Save the current mesh as an STL file."""
