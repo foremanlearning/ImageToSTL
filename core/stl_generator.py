@@ -11,7 +11,7 @@ class STLGenerator:
         self.mesh = None
         self.triangle_count = 0
         
-    def create_mesh_from_height_map(self, height_map, base_thickness=1.0, scale_factor=1.0, max_triangles=None):
+    def create_mesh_from_height_map(self, height_map, base_thickness=1.0, scale_factor=1.0, max_triangles=None, no_base=False):
         """
         Convert a height map to a 3D mesh.
         
@@ -20,6 +20,7 @@ class STLGenerator:
         - base_thickness: Thickness of the base in units
         - scale_factor: Scale factor to apply to the final mesh
         - max_triangles: Maximum number of triangles to generate (None for no limit)
+        - no_base: If True, only the surface will be generated without a base
         
         Returns:
         - A trimesh object representing the 3D model
@@ -31,9 +32,12 @@ class STLGenerator:
         height, width = height_map.shape
         
         # Calculate target downsample factor if max_triangles is specified
-        # The approximate number of triangles for a height map is 2 * (w-1) * (h-1) * 3 (top, bottom, sides)
+        # Adjust the triangle estimate based on whether we're creating a base or not
         downsample_factor = 1
-        estimated_triangles = 2 * (width-1) * (height-1) * 3
+        if no_base:
+            estimated_triangles = 2 * (width-1) * (height-1)  # Only top surface triangles
+        else:
+            estimated_triangles = 2 * (width-1) * (height-1) * 3  # Top, bottom, sides
         
         if max_triangles is not None and max_triangles > 0 and estimated_triangles > max_triangles:
             # Calculate the factor needed to get below max_triangles
@@ -63,13 +67,19 @@ class STLGenerator:
         # Create top vertices from height map
         for y in range(height):
             for x in range(width):
-                z = height_map[y, x] + base_thickness
+                # If no base, don't add base_thickness
+                if no_base:
+                    z = height_map[y, x]
+                else:
+                    z = height_map[y, x] + base_thickness
                 vertices.append([x * scale_factor, y * scale_factor, z * scale_factor])
         
-        # Create bottom vertices (flat base)
-        for y in range(height):
-            for x in range(width):
-                vertices.append([x * scale_factor, y * scale_factor, 0.0])
+        # If creating a base, add bottom vertices
+        if not no_base:
+            # Create bottom vertices (flat base)
+            for y in range(height):
+                for x in range(width):
+                    vertices.append([x * scale_factor, y * scale_factor, 0.0])
         
         vertices = np.array(vertices)
         
@@ -88,54 +98,56 @@ class STLGenerator:
                 faces.append([v1, v2, v3])
                 faces.append([v2, v4, v3])
         
-        # Bottom faces (base)
-        bottom_offset = height * width
-        for y in range(height - 1):
+        # If creating a base, add bottom and side faces
+        if not no_base:
+            # Bottom faces (base)
+            bottom_offset = height * width
+            for y in range(height - 1):
+                for x in range(width - 1):
+                    v1 = bottom_offset + y * width + x
+                    v2 = bottom_offset + y * width + (x + 1)
+                    v3 = bottom_offset + (y + 1) * width + x
+                    v4 = bottom_offset + (y + 1) * width + (x + 1)
+                    
+                    # Create two triangles for each quad (opposite direction to top)
+                    faces.append([v1, v3, v2])
+                    faces.append([v2, v3, v4])
+            
+            # Side faces - front and back
             for x in range(width - 1):
-                v1 = bottom_offset + y * width + x
-                v2 = bottom_offset + y * width + (x + 1)
-                v3 = bottom_offset + (y + 1) * width + x
-                v4 = bottom_offset + (y + 1) * width + (x + 1)
-                
-                # Create two triangles for each quad (opposite direction to top)
+                # Front side
+                v1 = x
+                v2 = x + 1
+                v3 = bottom_offset + x
+                v4 = bottom_offset + x + 1
                 faces.append([v1, v3, v2])
                 faces.append([v2, v3, v4])
-        
-        # Side faces - front and back
-        for x in range(width - 1):
-            # Front side
-            v1 = x
-            v2 = x + 1
-            v3 = bottom_offset + x
-            v4 = bottom_offset + x + 1
-            faces.append([v1, v3, v2])
-            faces.append([v2, v3, v4])
+                
+                # Back side
+                v1 = (height - 1) * width + x
+                v2 = (height - 1) * width + x + 1
+                v3 = bottom_offset + (height - 1) * width + x
+                v4 = bottom_offset + (height - 1) * width + x + 1
+                faces.append([v1, v2, v3])
+                faces.append([v2, v4, v3])
             
-            # Back side
-            v1 = (height - 1) * width + x
-            v2 = (height - 1) * width + x + 1
-            v3 = bottom_offset + (height - 1) * width + x
-            v4 = bottom_offset + (height - 1) * width + x + 1
-            faces.append([v1, v2, v3])
-            faces.append([v2, v4, v3])
-        
-        # Side faces - left and right
-        for y in range(height - 1):
-            # Left side
-            v1 = y * width
-            v2 = (y + 1) * width
-            v3 = bottom_offset + y * width
-            v4 = bottom_offset + (y + 1) * width
-            faces.append([v1, v2, v3])
-            faces.append([v2, v4, v3])
-            
-            # Right side
-            v1 = y * width + (width - 1)
-            v2 = (y + 1) * width + (width - 1)
-            v3 = bottom_offset + y * width + (width - 1)
-            v4 = bottom_offset + (y + 1) * width + (width - 1)
-            faces.append([v1, v3, v2])
-            faces.append([v2, v3, v4])
+            # Side faces - left and right
+            for y in range(height - 1):
+                # Left side
+                v1 = y * width
+                v2 = (y + 1) * width
+                v3 = bottom_offset + y * width
+                v4 = bottom_offset + (y + 1) * width
+                faces.append([v1, v2, v3])
+                faces.append([v2, v4, v3])
+                
+                # Right side
+                v1 = y * width + (width - 1)
+                v2 = (y + 1) * width + (width - 1)
+                v3 = bottom_offset + y * width + (width - 1)
+                v4 = bottom_offset + (y + 1) * width + (width - 1)
+                faces.append([v1, v3, v2])
+                faces.append([v2, v3, v4])
             
         faces = np.array(faces)
         

@@ -79,13 +79,19 @@ class STLWorker(QThread):
             self.progressUpdated.emit(60, f"Creating 3D mesh (limit: {max_triangles:,} triangles)...")
         else:
             self.progressUpdated.emit(60, "Creating 3D mesh...")
+            
+        # Check if we're creating a model with no base
+        no_base = params.get('no_base', False)
+        if no_base:
+            self.progressUpdated.emit(65, "Creating surface-only model (no base)...")
         
         # Create mesh with triangle limit
         mesh = self.stl_generator.create_mesh_from_height_map(
             self.image_processor.height_map,
             base_thickness=params.get('base_thickness', 1.0),
             scale_factor=params.get('scale_factor', 1.0),
-            max_triangles=max_triangles
+            max_triangles=max_triangles,
+            no_base=no_base
         )
         
         # Report triangle count
@@ -156,6 +162,8 @@ class MainWindow(QMainWindow):
         
         # Color mapping section
         self.color_mapper = ColorMappingWidget(self.image_processor)
+        # Connect color dropper signal
+        self.color_mapper.colorDropperToggled.connect(self.toggle_image_click_mode)
         
         # STL generation parameters
         stl_params_group = QGroupBox("STL Parameters")
@@ -170,6 +178,12 @@ class MainWindow(QMainWindow):
         self.base_thickness_spin.setSingleStep(0.1)
         base_thickness_layout.addWidget(self.base_thickness_spin)
         stl_params_layout.addLayout(base_thickness_layout)
+        
+        # No base checkbox
+        self.no_base_checkbox = QCheckBox("No Base (Surface Only)")
+        self.no_base_checkbox.setToolTip("Generate only the surface without a solid base")
+        self.no_base_checkbox.stateChanged.connect(self.toggle_base_options)
+        stl_params_layout.addWidget(self.no_base_checkbox)
         
         # Overall scale
         scale_layout = QHBoxLayout()
@@ -420,7 +434,8 @@ class MainWindow(QMainWindow):
             'smoothing_factor': self.smooth_slider.value() / 10.0,
             'base_thickness': self.base_thickness_spin.value(),
             'scale_factor': self.scale_spin.value(),
-            'max_triangles': self.triangle_limit_spin.value()
+            'max_triangles': self.triangle_limit_spin.value(),
+            'no_base': self.no_base_checkbox.isChecked()
         }
         
         # Configure and start the worker thread
@@ -470,7 +485,89 @@ class MainWindow(QMainWindow):
             
         if file_path:
             if self.color_mapper.load_preset(file_path):
-                self.status_label.setText(f"Loaded preset: {os.path.basename(file_path)}")
+                self.status_label.setText(f"Saved preset: {os.path.basename(file_path)}")
             else:
                 QMessageBox.critical(self, "Error", "Failed to load the preset file.")
-```
+
+    def toggle_image_click_mode(self, enabled):
+        """Toggle the image click mode for color dropper functionality."""
+        if enabled:
+            # Change cursor to crosshair to indicate dropper mode
+            self.image_label.setCursor(Qt.CrossCursor)
+            # Enable mouse tracking for the image label
+            self.image_label.setMouseTracking(True)
+            # Install event filter to capture mouse clicks on the image
+            self.image_label.installEventFilter(self)
+            # Update status
+            self.status_label.setText("Color dropper active: Click on the image to select a color")
+        else:
+            # Restore normal cursor
+            self.image_label.setCursor(Qt.ArrowCursor)
+            # Disable mouse tracking
+            self.image_label.setMouseTracking(False)
+            # Remove event filter
+            self.image_label.removeEventFilter(self)
+            # Update status
+            self.status_label.setText("Ready")
+
+    def eventFilter(self, obj, event):
+        """Filter events to capture mouse clicks on the image when dropper is active."""
+        if obj == self.image_label and event.type() == event.MouseButtonPress:
+            # Only handle left mouse button
+            if event.button() == Qt.LeftButton:
+                self.pick_color_from_image(event.pos())
+                return True
+        return super().eventFilter(obj, event)
+
+    def pick_color_from_image(self, pos):
+        """Pick a color from the image at the clicked position."""
+        if not self.image_processor.image:
+            return
+
+        # Get the pixmap from the label
+        pixmap = self.image_label.pixmap()
+        if not pixmap:
+            return
+            
+        # Convert position to image coordinates, accounting for aspect ratio scaling
+        label_size = self.image_label.size()
+        pixmap_size = pixmap.size()
+        
+        # Calculate scaling factors and offsets for centered image
+        scale_w = pixmap_size.width() / label_size.width()
+        scale_h = pixmap_size.height() / label_size.height()
+        scale = min(1.0, max(scale_w, scale_h))
+        
+        offset_x = (label_size.width() - pixmap_size.width() / scale) / 2
+        offset_y = (label_size.height() - pixmap_size.height() / scale) / 2
+        
+        # Adjust position based on scaling and centering
+        img_x = int((pos.x() - offset_x) * scale)
+        img_y = int((pos.y() - offset_y) * scale)
+        
+        # Make sure the point is within the image bounds
+        if img_x < 0 or img_x >= pixmap_size.width() or img_y < 0 or img_y >= pixmap_size.height():
+            self.status_label.setText("Click within the image boundaries")
+            return
+        
+        # Create a QImage from the pixmap and get the color at the calculated position
+        image = pixmap.toImage()
+        color = QColor(image.pixel(img_x, img_y))
+        
+        # Set the selected color in the color mapper
+        self.color_mapper.set_color_from_image(color)
+        
+        # Update status
+        self.status_label.setText(f"Color selected: {color.name()}")
+        return color
+
+    def toggle_base_options(self, state):
+        """Enable or disable base thickness controls based on the No Base checkbox."""
+        has_base = state != Qt.Checked
+        self.base_thickness_spin.setEnabled(has_base)
+        
+        # Update the status bar with information
+        if not has_base:
+            self.status_label.setText("Base disabled: Model will be generated as a surface only")
+        else:
+            self.status_label.setText("Base enabled: Model will include a solid base")

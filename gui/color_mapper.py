@@ -15,6 +15,7 @@ class ColorMappingWidget(QGroupBox):
     """
     
     colorMappingChanged = pyqtSignal()
+    colorDropperToggled = pyqtSignal(bool)  # Signal to notify when dropper is toggled
     
     def __init__(self, image_processor, parent=None):
         super().__init__("Color to Height Mapping", parent)
@@ -35,10 +36,20 @@ class ColorMappingWidget(QGroupBox):
         self.current_color_label.setStyleSheet("background-color: #FFFFFF; border: 1px solid black;")
         picker_layout.addWidget(self.current_color_label)
         
-        # Color picker button
+        # Color picker buttons
+        buttons_layout = QVBoxLayout()
+        
         self.pick_color_btn = QPushButton("Pick Color")
         self.pick_color_btn.clicked.connect(self.pick_color)
-        picker_layout.addWidget(self.pick_color_btn)
+        buttons_layout.addWidget(self.pick_color_btn)
+        
+        self.dropper_btn = QPushButton("Color Dropper")
+        self.dropper_btn.setCheckable(True)
+        self.dropper_btn.setToolTip("Click on the image to select a color")
+        self.dropper_btn.clicked.connect(self.toggle_color_dropper)
+        buttons_layout.addWidget(self.dropper_btn)
+        
+        picker_layout.addLayout(buttons_layout)
         
         # Color tolerance slider
         tolerance_layout = QHBoxLayout()
@@ -299,3 +310,23 @@ class ColorMappingWidget(QGroupBox):
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to load preset: {e}")
             return False
+    
+    def toggle_color_dropper(self, checked):
+        """Toggle the color dropper mode."""
+        if checked:
+            # Change cursor and notify main window that dropper is active
+            self.colorDropperToggled.emit(True)
+        else:
+            # Restore normal cursor and notify main window that dropper is inactive
+            self.colorDropperToggled.emit(False)
+            
+    def set_color_from_image(self, color):
+        """Set the current color from an image pixel."""
+        if color.isValid():
+            # Update the color display
+            self.current_color_label.setStyleSheet(f"background-color: {color.name()}; border: 1px solid black;")
+            
+            # If dropper was active, deactivate it
+            if self.dropper_btn.isChecked():
+                self.dropper_btn.setChecked(False)
+                self.colorDropperToggled.emit(False)
